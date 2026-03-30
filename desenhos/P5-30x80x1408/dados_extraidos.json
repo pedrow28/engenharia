@@ -1,0 +1,23 @@
+[
+  {
+    "A_tipo_peca": "PILAR",
+    "B_titulo_peca": "P5",
+    "C_nome_desenho": "P5-30x80x1408-FORMA E ARMAÇÃO-R01",
+    "D_quantidade": 1,
+    "E_secao": "30x80",
+    "F_comprimento_cm": 1408.0,
+    "G_volume_concreto_m3": 3.746,
+    "H_volume_concreto_total_m3": 3.746,
+    "I_fck_mpa": 45.0,
+    "J_fcj_mpa": 20.0,
+    "K_peso_aco_frouxo_kg": 262.6,
+    "L_peso_aco_protendido_kg": 0,
+    "M_peso_aco_consolo_kg": 169.82,
+    "N_peso_total_unitario_kg": 9422.82,
+    "O_taxa_aco_frouxo_kg_m3": 115.43513080619327,
+    "P_taxa_aco_protendido_kg_m3": null,
+    "Q_peso_total_t": 9.42282,
+    "R_peso_total_aco_frouxo_t": 0.2626,
+    "S_peso_total_aco_protendido_t": null
+  }
+]

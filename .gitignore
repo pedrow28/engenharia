@@ -1,0 +1,18 @@
+# Python
+venv_eng/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Temporários do Office
+~$*
+
+# Arquivos grandes de dados (opcionais — remova se quiser versionar)
+dados/dados_extraidos.json
+
+# Backup
+_backup/
+
+# Ambientes e configs locais
+.env

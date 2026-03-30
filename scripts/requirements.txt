@@ -1,0 +1,5 @@
+# Dependências para Automação de Engenharia
+
+ezdxf>=1.1.0
+openpyxl>=3.0.0
+# tkinter já vem incluído no Python padrão

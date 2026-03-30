@@ -1,0 +1,23 @@
+[
+  {
+    "A_tipo_peca": "PILAR",
+    "B_titulo_peca": "P15",
+    "C_nome_desenho": "P15-80x40x1416-FORMA E ARMAÇÃO-R03",
+    "D_quantidade": 1,
+    "E_secao": "80x40",
+    "F_comprimento_cm": 1416.0,
+    "G_volume_concreto_m3": 4.725,
+    "H_volume_concreto_total_m3": 4.725,
+    "I_fck_mpa": 45.0,
+    "J_fcj_mpa": 20.0,
+    "K_peso_aco_frouxo_kg": 469.63,
+    "L_peso_aco_protendido_kg": 0,
+    "M_peso_aco_consolo_kg": 263.04,
+    "N_peso_total_unitario_kg": 12072.67,
+    "O_taxa_aco_frouxo_kg_m3": 155.0624338624339,
+    "P_taxa_aco_protendido_kg_m3": null,
+    "Q_peso_total_t": 12.07267,
+    "R_peso_total_aco_frouxo_t": 0.46963,
+    "S_peso_total_aco_protendido_t": null
+  }
+]
