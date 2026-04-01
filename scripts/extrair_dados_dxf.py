@@ -102,25 +102,34 @@ def extract_notas(msp):
             notas = {a.dxf.tag: a.dxf.text for a in e.attribs}
             def safe_float(key):
                 val = notas.get(key, '-')
-                if not val or str(val).strip() in ('-', ''):
+                if not val or str(val).strip() in ('-', '', '–'):
                     return None
                 try:
                     return float(str(val).replace(',', '.'))
                 except (ValueError, TypeError):
                     return None
-            def first_valid(*keys):
-                for k in keys:
-                    v = safe_float(k)
-                    if v is not None:
-                        return v
+            def extract_fcj():
+                """
+                Extrai fcj conforme o template de viga/pilar:
+                - Tag H = nota 7 (LIBERAÇÃO DA PROTENSÃO fcj) — vigas protendidas
+                - Tag E = nota 5 (LIBERAÇÃO P/ DESFORMA fcj)  — vigas sem protensão / pilares
+                Prioridade: H > E. Tag G é a força de protensão (t/c) e NÃO é fcj.
+                """
+                # Protensão (nota 7) tem prioridade
+                v = safe_float('H')
+                if v is not None:
+                    return v
+                # Desforma (nota 5) — vigas sem protensão e pilares
+                v = safe_float('E')
+                if v is not None:
+                    return v
                 return None
             return {
                 'fck_mpa': safe_float('A'),
                 'volume_concreto_m3': safe_float('B'),
                 'peso_concreto_kgf': safe_float('C'),
                 'peso_peca_kgf': safe_float('D'),
-                # fcj pode estar em E (pos.5) ou G (pos.7) dependendo do template
-                'fcj_mpa': first_valid('E', 'G', '5', '7'),
+                'fcj_mpa': extract_fcj(),
                 'cobrimento_cm': safe_float('I'),
             }
     return {}
@@ -156,6 +165,136 @@ def extract_carimbo(msp):
                 }
             break
     return {}
+
+
+def extract_laje_carimbo(msp):
+    """
+    Extrai dados do bloco SM_formatoA4paraLajes (carimbo das lajes).
+    [0]=tipo_desenho, [1]=titulo+qtd (ex: 'L-1001 (88x)'), [2]=seção+comprimento (ex: 'L-16x125x712,5')
+    """
+    for e in msp.query('INSERT'):
+        if e.dxf.name == 'SM_formatoA4paraLajes':
+            attribs = [a.dxf.text for a in e.attribs]
+            if len(attribs) < 3:
+                break
+
+            nome_com_qtd = attribs[1]
+            match_qtd = re.search(r'\((\d+)[xX]\)', nome_com_qtd)
+            nome_limpo = re.sub(r'\s*\(\d+[xX]\)', '', nome_com_qtd).strip()
+            if match_qtd:
+                quantidade = int(match_qtd.group(1))
+            elif '=' in nome_limpo:
+                quantidade = len(nome_limpo.split('='))
+            else:
+                quantidade = None
+
+            # Parse seção e comprimento: 'L-16x125x712,5' → secao='16x125', comp=712.5
+            secao_raw = re.sub(r'^[A-Za-z]+-?', '', attribs[2])  # remove prefixo de letra
+            parts = re.split(r'[xX]', secao_raw)
+            if len(parts) >= 3:
+                secao = f"{parts[0]}x{parts[1]}"
+                comprimento_cm = float(parts[2].replace(',', '.'))
+            elif len(parts) == 2:
+                secao = f"{parts[0]}x{parts[1]}"
+                comprimento_cm = None
+            else:
+                secao = secao_raw
+                comprimento_cm = None
+
+            return {
+                'titulo_peca': nome_limpo,
+                'quantidade': quantidade,
+                'secao': secao,
+                'comprimento_cm': comprimento_cm,
+            }
+    return {}
+
+
+def extract_laje_table(msp, doc):
+    """
+    Extrai dados das tabelas da laje via bloco ACAD_TABLE (*T10).
+    Tabelas no bloco: RESUMO DE AÇO CP-190 RB, TENSÕES DO CONCRETO, DADOS PARA CONFERÊNCIA.
+    Valores ficam na mesma linha (Y) do rótulo, em x≈317.
+    """
+    # Localizar o bloco de geometria do ACAD_TABLE
+    table_block_name = None
+    for e in msp:
+        if e.dxftype() == 'ACAD_TABLE':
+            try:
+                table_block_name = e.dxf.geometry
+            except Exception:
+                pass
+            break
+
+    if not table_block_name or table_block_name not in doc.blocks:
+        return {}
+
+    blk = doc.blocks[table_block_name]
+
+    def clean(txt):
+        txt = re.sub(r'\{\\[^;]*;([^}]*)\}', r'\1', txt)
+        txt = re.sub(r'\\[A-Za-z][^;]*;', '', txt).strip()
+        return txt
+
+    # Coletar textos agrupados por Y
+    y_groups = defaultdict(list)
+    for e in blk:
+        if e.dxftype() == 'TEXT':
+            txt = e.dxf.text.strip()
+            if txt:
+                y_groups[round(e.dxf.insert.y, 0)].append((e.dxf.insert.x, txt))
+        elif e.dxftype() == 'MTEXT':
+            txt = clean(e.text).strip()
+            if txt and txt != '{':
+                y_groups[round(e.dxf.insert.y, 0)].append((e.dxf.insert.x, txt))
+
+    volume = fck = fcj = peso_protendido = None
+
+    for items in y_groups.values():
+        items_s = sorted(items, key=lambda i: i[0])
+
+        for i, (x, txt) in enumerate(items_s):
+            tu = txt.upper()
+
+            if 'VOLUME DO CONCRETO' in tu:
+                for _, v in items_s[i + 1:]:
+                    try:
+                        volume = float(v.replace(',', '.'))
+                        break
+                    except ValueError:
+                        continue
+
+            elif 'DE TRABALHO' in tu and 'FCK' in tu:
+                for _, v in items_s[i + 1:]:
+                    try:
+                        fck = float(v.replace(',', '.'))
+                        break
+                    except ValueError:
+                        continue
+
+            elif ('PARA PROTENSÃO' in tu or 'PARA PROTENSAO' in tu) and 'FCJ' in tu:
+                for _, v in items_s[i + 1:]:
+                    try:
+                        fcj = float(v.replace(',', '.'))
+                        break
+                    except ValueError:
+                        continue
+
+            # PESO TOTAL do RESUMO DE AÇO CP-190 RB: rótulo na coluna esquerda (x < 200)
+            elif tu == 'PESO TOTAL' and x < 200:
+                for _, v in items_s[i + 1:]:
+                    try:
+                        peso_protendido = float(v.replace(',', '.'))
+                        break
+                    except ValueError:
+                        continue
+
+    return {
+        'volume_concreto_m3': volume,
+        'fck_mpa': fck,
+        'fcj_mpa': fcj,
+        'peso_aco_protendido_kg': peso_protendido,
+    }
 
 
 # =============================================================================
@@ -424,13 +563,35 @@ def extrair_dados_completos(filepath):
     msp = doc.modelspace()
     filename = os.path.basename(filepath)
 
-    # Extrair de cada fonte
     dados_nome = parse_filename(filename)
-    dados_notas = extract_notas(msp)
-    dados_carimbo = extract_carimbo(msp)
-    dados_aco = extract_peso_total_aco(msp)
 
-    # Determinar tipo de peça
+    # Detectar tipo pelo nome do arquivo para escolher funções de extração corretas
+    titulo_nome = dados_nome.get('titulo_peca', '')
+    if re.match(r'^L', titulo_nome, re.IGNORECASE):
+        _tipo_inicial = 'LAJE'
+    elif re.match(r'^(VG|VL|VR|VTI|VTA|V\d)', titulo_nome):
+        _tipo_inicial = 'VIGA'
+    elif re.match(r'^P', titulo_nome):
+        _tipo_inicial = 'PILAR'
+    else:
+        _tipo_inicial = 'OUTRO'
+
+    if _tipo_inicial == 'LAJE':
+        dados_carimbo = extract_laje_carimbo(msp)
+        _laje_table = extract_laje_table(msp, doc)
+        dados_notas = _laje_table  # mesmas chaves: volume_concreto_m3, fck_mpa, fcj_mpa
+        dados_aco = {
+            'peso_aco_frouxo_kg': 0,
+            'peso_aco_consolo_kg': None,
+            'peso_aco_protendido_kg': _laje_table.get('peso_aco_protendido_kg', 0),
+            '_n_consolos': 0,
+        }
+    else:
+        dados_carimbo = extract_carimbo(msp)
+        dados_notas = extract_notas(msp)
+        dados_aco = extract_peso_total_aco(msp)
+
+    # Determinar tipo de peça (confirmação via carimbo)
     titulo = dados_carimbo.get('titulo_peca', dados_nome.get('titulo_peca', ''))
     if re.match(r'^(VG|VL|VR|VTI|VTA|V\d)', titulo):
         tipo_peca = 'VIGA'
@@ -451,8 +612,13 @@ def extrair_dados_completos(filepath):
         quantidade = dados_carimbo['quantidade']
     else:
         quantidade = 1
-    secao = dados_nome.get('secao') or dados_carimbo.get('secao_comprimento', '')
-    comprimento = dados_nome.get('comprimento_cm')
+
+    if tipo_peca == 'LAJE':
+        secao = dados_carimbo.get('secao') or dados_nome.get('secao', '')
+        comprimento = dados_carimbo.get('comprimento_cm') or dados_nome.get('comprimento_cm')
+    else:
+        secao = dados_nome.get('secao') or dados_carimbo.get('secao_comprimento', '')
+        comprimento = dados_nome.get('comprimento_cm')
     volume = dados_notas.get('volume_concreto_m3')
     fck = dados_notas.get('fck_mpa')
     fcj = dados_notas.get('fcj_mpa')
