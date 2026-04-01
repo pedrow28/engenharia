@@ -2,4 +2,6 @@
 
 ezdxf>=1.1.0
 openpyxl>=3.0.0
+fastapi>=0.100.0
+uvicorn>=0.23.0
 # tkinter já vem incluído no Python padrão

@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tech Estrutural · Automação</title>
+  <style>
+    /* ── Reset & Base ─────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:          #0e0e0f;
+      --bg-elevated: #141415;
+      --bg-card:     #1a1a1c;
+      --bg-input:    #222224;
+      --bg-terminal: #101011;
+
+      --green:       #78b87a;
+      --green-glow:  rgba(120,184,122,.18);
+      --green-border:rgba(120,184,122,.35);
+      --green-dim:   #527a54;
+
+      --text:        #e0e0e1;
+      --text-muted:  #6a6a6d;
+      --text-dim:    #3a3a3d;
+
+      --border:      #252527;
+      --border-mid:  #2e2e31;
+      --radius:      10px;
+      --radius-sm:   6px;
+
+      --red:         #c76070;
+      --amber:       #c9945a;
+    }
+
+    html, body {
+      height: 100%;
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Scrollbar ────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border-mid); border-radius: 3px; }
+
+    /* ── Layout ───────────────────────────────────────────── */
+    .app {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ───────────────────────────────────────────── */
+    header {
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border);
+      padding: 0 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 68px;
+      flex-shrink: 0;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+
+    .header-logo {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .header-logo img {
+      height: 42px;
+      width: auto;
+      display: block;
+    }
+
+    .header-divider {
+      width: 1px;
+      height: 28px;
+      background: var(--border-mid);
+    }
+
+    .header-subtitle {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    .header-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--text-dim);
+      transition: background .3s;
+    }
+    .status-dot.idle   { background: var(--text-dim); }
+    .status-dot.running {
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green);
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    .status-dot.done   { background: var(--green); }
+    .status-dot.error  { background: var(--red); }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: .35; }
+    }
+
+    /* ── Main ─────────────────────────────────────────────── */
+    main {
+      flex: 1;
+      max-width: 940px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 36px 24px 48px;
+      display: flex;
+      flex-direction: column;
+      gap: 28px;
+    }
+
+    /* ── Section labels ───────────────────────────────────── */
+    .section-label {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .16em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 12px;
+    }
+
+    /* ── Tipo cards (Pilares / Vigas / Lajes) ─────────────── */
+    .tipos-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 14px;
+    }
+
+    .tipo-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+      position: relative;
+      overflow: hidden;
+      transition: border-color .2s;
+    }
+    .tipo-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, var(--green-glow) 0%, transparent 60%);
+      opacity: 0;
+      transition: opacity .3s;
+      pointer-events: none;
+    }
+    .tipo-card:focus-within {
+      border-color: var(--green-border);
+    }
+    .tipo-card:focus-within::before {
+      opacity: 1;
+    }
+
+    /* Corner decoration */
+    .tipo-card::after {
+      content: '';
+      position: absolute;
+      top: 0; right: 0;
+      width: 28px; height: 28px;
+      border-top: 2px solid var(--green-dim);
+      border-right: 2px solid var(--green-dim);
+      border-radius: 0 var(--radius) 0 0;
+      opacity: 0;
+      transition: opacity .3s;
+    }
+    .tipo-card:focus-within::after { opacity: 1; }
+
+    .tipo-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: var(--radius-sm);
+      background: var(--bg-input);
+      border: 1px solid var(--border-mid);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 14px;
+    }
+
+    .tipo-icon svg {
+      width: 18px;
+      height: 18px;
+      stroke: var(--green);
+      fill: none;
+      stroke-width: 1.5;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    .tipo-name {
+      font-size: 13px;
+      font-weight: 600;
+      letter-spacing: .04em;
+      color: var(--text);
+      margin-bottom: 14px;
+    }
+
+    .input-row {
+      display: flex;
+      gap: 8px;
+      align-items: stretch;
+    }
+
+    .path-input {
+      flex: 1;
+      background: var(--bg-input);
+      border: 1px solid var(--border-mid);
+      border-radius: var(--radius-sm);
+      padding: 8px 12px;
+      color: var(--text);
+      font-size: 12px;
+      font-family: 'Consolas', 'Courier New', monospace;
+      outline: none;
+      transition: border-color .2s;
+      min-width: 0;
+    }
+    .path-input::placeholder { color: var(--text-dim); }
+    .path-input:focus { border-color: var(--green-border); }
+
+    .btn-browse {
+      background: var(--bg-input);
+      border: 1px solid var(--border-mid);
+      border-radius: var(--radius-sm);
+      padding: 0 12px;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .06em;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all .15s;
+    }
+    .btn-browse:hover {
+      background: var(--border-mid);
+      color: var(--text);
+      border-color: var(--border-mid);
+    }
+
+    /* ── Planilha row ─────────────────────────────────────── */
+    .planilha-row {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 20px;
+    }
+
+    .planilha-inner {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .planilha-icon {
+      width: 34px;
+      height: 34px;
+      border-radius: var(--radius-sm);
+      background: var(--bg-input);
+      border: 1px solid var(--border-mid);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+
+    .planilha-icon svg {
+      width: 18px;
+      height: 18px;
+      stroke: var(--amber);
+      fill: none;
+      stroke-width: 1.5;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    /* ── Execute button ───────────────────────────────────── */
+    .btn-execute {
+      width: 100%;
+      padding: 16px 24px;
+      background: var(--green);
+      border: none;
+      border-radius: var(--radius);
+      color: #0a1a0b;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      transition: all .2s;
+      box-shadow: 0 4px 24px rgba(120,184,122,.2);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .btn-execute::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, rgba(255,255,255,.12) 0%, transparent 60%);
+      pointer-events: none;
+    }
+
+    .btn-execute:hover:not(:disabled) {
+      background: #8aca8c;
+      box-shadow: 0 6px 32px rgba(120,184,122,.35);
+      transform: translateY(-1px);
+    }
+
+    .btn-execute:active:not(:disabled) {
+      transform: translateY(0);
+    }
+
+    .btn-execute:disabled {
+      background: var(--green-dim);
+      color: rgba(10,26,11,.5);
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+
+    .btn-execute svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      fill: none;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    /* ── Error banner ─────────────────────────────────────── */
+    .error-banner {
+      background: rgba(199,96,112,.1);
+      border: 1px solid rgba(199,96,112,.3);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      color: var(--red);
+      font-size: 12px;
+      display: none;
+    }
+    .error-banner.visible { display: block; }
+
+    /* ── Terminal ─────────────────────────────────────────── */
+    .terminal-wrap {
+      background: var(--bg-terminal);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .terminal-bar {
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .terminal-dots {
+      display: flex;
+      gap: 6px;
+    }
+    .terminal-dots span {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--border-mid);
+    }
+    .terminal-dots span:first-child  { background: #c76070; }
+    .terminal-dots span:nth-child(2) { background: #c9945a; }
+    .terminal-dots span:last-child   { background: #78b87a; }
+
+    .terminal-title {
+      font-size: 11px;
+      color: var(--text-muted);
+      letter-spacing: .06em;
+      font-family: 'Consolas', monospace;
+    }
+
+    .terminal-body {
+      height: 280px;
+      overflow-y: auto;
+      padding: 16px 20px;
+      font-family: 'Consolas', 'Courier New', monospace;
+      font-size: 12.5px;
+      line-height: 1.75;
+    }
+
+    .terminal-line {
+      color: #9a9a9e;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    .terminal-line.success { color: var(--green); }
+    .terminal-line.error   { color: var(--red); }
+    .terminal-line.heading { color: var(--text); font-weight: 600; }
+    .terminal-line.divider { color: var(--text-dim); }
+    .terminal-line.prompt  { color: var(--green); }
+
+    /* ── Cursor blink ─────────────────────────────────────── */
+    .cursor {
+      display: inline-block;
+      width: 8px;
+      height: 14px;
+      background: var(--green);
+      vertical-align: text-bottom;
+      animation: blink .9s step-end infinite;
+      border-radius: 1px;
+    }
+    @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+    /* ── Footer ───────────────────────────────────────────── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 14px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg-elevated);
+      flex-shrink: 0;
+    }
+
+    .footer-text {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .footer-version {
+      font-size: 11px;
+      color: var(--text-dim);
+      font-family: 'Consolas', monospace;
+    }
+
+    /* ── Geometric decoration ─────────────────────────────── */
+    .geo-line {
+      position: absolute;
+      background: var(--green);
+      opacity: .06;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+
+    <!-- ── Header ─────────────────────────────────────────── -->
+    <header>
+      <div class="header-logo">
+        <img src="/assets/logo.png" alt="Tech Estrutural" />
+        <div class="header-divider"></div>
+        <span class="header-subtitle">Automação de Projetos</span>
+      </div>
+      <div class="header-status">
+        <div class="status-dot idle" id="statusDot"></div>
+        <span id="statusText">Aguardando</span>
+      </div>
+    </header>
+
+    <!-- ── Main ───────────────────────────────────────────── -->
+    <main>
+
+      <!-- Pastas por tipo -->
+      <section>
+        <div class="section-label">1 · Pastas dos Desenhos DWG</div>
+        <div class="tipos-grid">
+
+          <!-- Pilares -->
+          <div class="tipo-card">
+            <div class="tipo-icon">
+              <!-- Column icon -->
+              <svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="20" rx="1"/><line x1="6" y1="2" x2="18" y2="2"/><line x1="6" y1="22" x2="18" y2="22"/></svg>
+            </div>
+            <div class="tipo-name">Pilares</div>
+            <div class="input-row">
+              <input class="path-input" id="pathPilares" type="text" placeholder="Selecionar pasta..." readonly />
+              <button class="btn-browse" onclick="browse('Pilares', 'Selecionar pasta dos Pilares')">…</button>
+            </div>
+          </div>
+
+          <!-- Vigas -->
+          <div class="tipo-card">
+            <div class="tipo-icon">
+              <!-- Beam icon -->
+              <svg viewBox="0 0 24 24"><rect x="2" y="9" width="20" height="6" rx="1"/><line x1="2" y1="6" x2="22" y2="6"/><line x1="2" y1="18" x2="22" y2="18"/></svg>
+            </div>
+            <div class="tipo-name">Vigas</div>
+            <div class="input-row">
+              <input class="path-input" id="pathVigas" type="text" placeholder="Selecionar pasta..." readonly />
+              <button class="btn-browse" onclick="browse('Vigas', 'Selecionar pasta das Vigas')">…</button>
+            </div>
+          </div>
+
+          <!-- Lajes -->
+          <div class="tipo-card">
+            <div class="tipo-icon">
+              <!-- Slab icon -->
+              <svg viewBox="0 0 24 24"><rect x="2" y="8" width="20" height="8" rx="1"/><line x1="2" y1="5" x2="22" y2="5"/><line x1="2" y1="19" x2="22" y2="19"/><line x1="8" y1="8" x2="8" y2="16"/><line x1="16" y1="8" x2="16" y2="16"/></svg>
+            </div>
+            <div class="tipo-name">Lajes</div>
+            <div class="input-row">
+              <input class="path-input" id="pathLajes" type="text" placeholder="Selecionar pasta..." readonly />
+              <button class="btn-browse" onclick="browse('Lajes', 'Selecionar pasta das Lajes')">…</button>
+            </div>
+          </div>
+
+        </div>
+      </section>
+
+      <!-- Planilha -->
+      <section>
+        <div class="section-label">2 · Planilha de Controle</div>
+        <div class="planilha-row">
+          <div class="planilha-inner">
+            <div class="planilha-icon">
+              <!-- Spreadsheet icon -->
+              <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="21"/></svg>
+            </div>
+            <input class="path-input" id="pathExcel" type="text" placeholder="Selecionar planilha .xlsm…" readonly style="font-size:12.5px;" />
+            <button class="btn-browse" onclick="browseFile()" style="padding:0 16px;">Selecionar</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- Erro -->
+      <div class="error-banner" id="errorBanner"></div>
+
+      <!-- Botão executar -->
+      <section>
+        <button class="btn-execute" id="btnExecutar" onclick="executar()">
+          <svg viewBox="0 0 24 24"><polygon points="5,3 19,12 5,21"/></svg>
+          Executar Automação
+        </button>
+      </section>
+
+      <!-- Terminal -->
+      <section>
+        <div class="section-label">Log de Execução</div>
+        <div class="terminal-wrap">
+          <div class="terminal-bar">
+            <div class="terminal-dots">
+              <span></span><span></span><span></span>
+            </div>
+            <span class="terminal-title">automacao.log</span>
+          </div>
+          <div class="terminal-body" id="terminal">
+            <span class="terminal-line prompt">$ tech-estrutural-automacao v1.0</span>
+            <br/>
+            <span class="terminal-line" style="color:var(--text-dim)">Aguardando execução...</span>
+            <br/>
+            <span class="cursor"></span>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- ── Footer ──────────────────────────────────────────── -->
+    <footer>
+      <span class="footer-text">Tech Estrutural Projetos &nbsp;·&nbsp; Sistema de Automação DXF</span>
+      <span class="footer-version">v1.0.0</span>
+    </footer>
+
+  </div>
+
+  <script>
+    // ── State ──────────────────────────────────────────────
+    const paths = { Pilares: '', Vigas: '', Lajes: '' };
+    let sse = null;
+    let isRunning = false;
+
+    // ── DOM refs ───────────────────────────────────────────
+    const terminal   = document.getElementById('terminal');
+    const btnExecutar = document.getElementById('btnExecutar');
+    const errorBanner = document.getElementById('errorBanner');
+    const statusDot  = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+
+    // ── Browse folder ──────────────────────────────────────
+    async function browse(tipo, title) {
+      try {
+        const res = await fetch(`/api/browse/folder?title=${encodeURIComponent(title)}`);
+        const { path } = await res.json();
+        if (path) {
+          paths[tipo] = path;
+          document.getElementById(`path${tipo}`).value = path;
+        }
+      } catch (e) {
+        showError('Erro ao abrir diálogo de pasta.');
+      }
+    }
+
+    // ── Browse file ────────────────────────────────────────
+    async function browseFile() {
+      try {
+        const res = await fetch('/api/browse/file?title=Selecionar+Planilha+Excel');
+        const { path } = await res.json();
+        if (path) {
+          document.getElementById('pathExcel').value = path;
+        }
+      } catch (e) {
+        showError('Erro ao abrir diálogo de arquivo.');
+      }
+    }
+
+    // ── Execute ────────────────────────────────────────────
+    async function executar() {
+      hideError();
+
+      const excel = document.getElementById('pathExcel').value.trim();
+      const pastasPayload = {};
+      for (const [tipo, path] of Object.entries(paths)) {
+        if (path) pastasPayload[tipo] = path;
+      }
+
+      if (!excel) { showError('Selecione a planilha de controle.'); return; }
+      if (Object.keys(pastasPayload).length === 0) {
+        showError('Selecione pelo menos uma pasta de desenhos.');
+        return;
+      }
+
+      clearTerminal();
+      setStatus('running');
+
+      try {
+        const res = await fetch('/api/executar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pastas: pastasPayload, excel }),
+        });
+        const data = await res.json();
+        if (!res.ok) { showError(data.error || 'Erro ao iniciar.'); setStatus('error'); return; }
+      } catch (e) {
+        showError('Erro de conexão com o servidor.'); setStatus('error'); return;
+      }
+
+      startLogStream();
+    }
+
+    // ── SSE log stream ─────────────────────────────────────
+    function startLogStream() {
+      if (sse) sse.close();
+
+      sse = new EventSource('/api/log/stream');
+
+      sse.onmessage = (e) => {
+        const data = JSON.parse(e.data);
+        if (data.ping) return;
+        if (data.text === '__DONE__') {
+          sse.close();
+          setStatus('done');
+          appendLine('');
+          return;
+        }
+        appendLine(data.text);
+      };
+
+      sse.onerror = () => {
+        sse.close();
+        setStatus('error');
+      };
+    }
+
+    // ── Terminal helpers ───────────────────────────────────
+    function clearTerminal() {
+      terminal.innerHTML = '<span class="terminal-line prompt">$ executando automacao...\n</span><br/>';
+    }
+
+    function appendLine(text) {
+      // Remove cursor if exists
+      const cursor = terminal.querySelector('.cursor');
+      if (cursor) cursor.remove();
+
+      const el = document.createElement('span');
+      el.className = classifyLine(text);
+
+      // Colorize ✓ and ✗
+      let display = text
+        .replace(/✓/g, '<span style="color:var(--green)">✓</span>')
+        .replace(/✗/g, '<span style="color:var(--red)">✗</span>');
+
+      el.innerHTML = display + '\n';
+      terminal.appendChild(el);
+      terminal.appendChild(document.createElement('br'));
+      terminal.scrollTop = terminal.scrollHeight;
+    }
+
+    function classifyLine(text) {
+      const t = text.trim();
+      if (t.startsWith('━') || t.startsWith('=')) return 'terminal-line divider';
+      if (t.includes('CONCLUÍDA COM SUCESSO') || t.includes('✓ ')) return 'terminal-line success';
+      if (t.includes('ERRO') || t.includes('✗ ') || t.includes('Falha')) return 'terminal-line error';
+      if (t.startsWith('[') && t.includes('/')) return 'terminal-line heading';
+      return 'terminal-line';
+    }
+
+    // ── Status ─────────────────────────────────────────────
+    function setStatus(state) {
+      isRunning = state === 'running';
+      btnExecutar.disabled = isRunning;
+
+      statusDot.className = `status-dot ${state}`;
+
+      const labels = {
+        idle:    'Aguardando',
+        running: 'Executando…',
+        done:    'Concluído',
+        error:   'Erro',
+      };
+      statusText.textContent = labels[state] || state;
+
+      btnExecutar.innerHTML = isRunning
+        ? '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg> Executando…'
+        : '<svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5,3 19,12 5,21"/></svg> Executar Automação';
+    }
+
+    // ── Error banner ───────────────────────────────────────
+    function showError(msg) {
+      errorBanner.textContent = msg;
+      errorBanner.classList.add('visible');
+    }
+    function hideError() {
+      errorBanner.classList.remove('visible');
+    }
+  </script>
+</body>
+</html>
