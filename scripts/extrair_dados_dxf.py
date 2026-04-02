@@ -183,10 +183,13 @@ def extract_laje_carimbo(msp):
             nome_limpo = re.sub(r'\s*\(\d+[xX]\)', '', nome_com_qtd).strip()
             if match_qtd:
                 quantidade = int(match_qtd.group(1))
+                quantidade_explicita = True
             elif '=' in nome_limpo:
                 quantidade = len(nome_limpo.split('='))
+                quantidade_explicita = False
             else:
                 quantidade = None
+                quantidade_explicita = False
 
             # Parse seção e comprimento: 'L-16x125x712,5' → secao='16x125', comp=712.5
             secao_raw = re.sub(r'^[A-Za-z]+-?', '', attribs[2])  # remove prefixo de letra
@@ -204,6 +207,7 @@ def extract_laje_carimbo(msp):
             return {
                 'titulo_peca': nome_limpo,
                 'quantidade': quantidade,
+                'quantidade_explicita': quantidade_explicita,
                 'secao': secao,
                 'comprimento_cm': comprimento_cm,
             }
@@ -603,9 +607,16 @@ def extrair_dados_completos(filepath):
         tipo_peca = 'OUTRO'
 
     # Valores base — peças igualadas (P11=P12 → 2) sempre têm prioridade
+    # Para lajes igualadas com (Nx) explícito no carimbo (ex: L-201(75x)=L-301(75x)),
+    # a quantidade total é Nx × número de igualadas (75 × 2 = 150).
     titulo_arquivo = dados_nome.get('titulo_peca', '')
     if '=' in titulo:
-        quantidade = len(titulo.split('='))
+        n_iguais = len(titulo.split('='))
+        carimbo_qtd = dados_carimbo.get('quantidade')
+        if dados_carimbo.get('quantidade_explicita') and carimbo_qtd:
+            quantidade = carimbo_qtd * n_iguais
+        else:
+            quantidade = n_iguais
     elif '=' in titulo_arquivo:
         quantidade = len(titulo_arquivo.split('='))
     elif dados_carimbo.get('quantidade') is not None:
