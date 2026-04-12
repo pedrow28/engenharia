@@ -429,6 +429,105 @@
     .terminal-line.divider { color: var(--text-dim); }
     .terminal-line.prompt  { color: var(--green); }
 
+    /* ── Report panel ─────────────────────────────────────── */
+    .report-panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      display: none;
+    }
+    .report-panel.visible { display: block; }
+
+    .report-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .report-header svg {
+      width: 18px;
+      height: 18px;
+      stroke-width: 2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+      flex-shrink: 0;
+    }
+    .report-header.all-ok svg  { stroke: var(--green); }
+    .report-header.has-err svg { stroke: var(--red); }
+
+    .report-title {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: .04em;
+    }
+    .report-header.all-ok .report-title  { color: var(--green); }
+    .report-header.has-err .report-title  { color: var(--red); }
+
+    .report-summary {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-left: auto;
+      font-family: 'Consolas', monospace;
+    }
+
+    .report-table {
+      width: 100%;
+      border-collapse: collapse;
+    }
+    .report-table tr {
+      border-bottom: 1px solid var(--border);
+    }
+    .report-table tr:last-child {
+      border-bottom: none;
+    }
+    .report-table td {
+      padding: 12px 20px;
+      font-size: 12.5px;
+      vertical-align: middle;
+    }
+    .report-table .col-status {
+      width: 36px;
+      text-align: center;
+      padding-right: 0;
+    }
+    .report-table .col-status svg {
+      width: 16px;
+      height: 16px;
+      stroke-width: 2.5;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+    }
+    .report-table .col-status.ok svg  { stroke: var(--green); }
+    .report-table .col-status.err svg { stroke: var(--red); }
+
+    .report-table .col-name {
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: .02em;
+    }
+    .report-table .col-path {
+      color: var(--text-muted);
+      font-family: 'Consolas', monospace;
+      font-size: 11px;
+      max-width: 360px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .report-table .col-result {
+      text-align: right;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    .report-table .col-result.ok  { color: var(--green); }
+    .report-table .col-result.err { color: var(--red); }
+
     /* ── Cursor blink ─────────────────────────────────────── */
     .cursor {
       display: inline-block;
@@ -564,6 +663,21 @@
         </button>
       </section>
 
+      <!-- Relatório -->
+      <section>
+        <div class="report-panel" id="reportPanel">
+          <div class="report-header" id="reportHeader">
+            <svg id="reportIconOk" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><polyline points="8,12 11,15 16,9"/></svg>
+            <svg id="reportIconErr" viewBox="0 0 24 24" style="display:none"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+            <span class="report-title" id="reportTitle"></span>
+            <span class="report-summary" id="reportSummary"></span>
+          </div>
+          <table class="report-table">
+            <tbody id="reportBody"></tbody>
+          </table>
+        </div>
+      </section>
+
       <!-- Terminal -->
       <section>
         <div class="section-label">Log de Execução</div>
@@ -601,11 +715,16 @@
     let isRunning = false;
 
     // ── DOM refs ───────────────────────────────────────────
-    const terminal   = document.getElementById('terminal');
+    const terminal    = document.getElementById('terminal');
     const btnExecutar = document.getElementById('btnExecutar');
     const errorBanner = document.getElementById('errorBanner');
-    const statusDot  = document.getElementById('statusDot');
-    const statusText = document.getElementById('statusText');
+    const statusDot   = document.getElementById('statusDot');
+    const statusText  = document.getElementById('statusText');
+    const reportPanel = document.getElementById('reportPanel');
+    const reportHeader= document.getElementById('reportHeader');
+    const reportTitle = document.getElementById('reportTitle');
+    const reportSummary = document.getElementById('reportSummary');
+    const reportBody  = document.getElementById('reportBody');
 
     // ── Browse folder ──────────────────────────────────────
     async function browse(tipo, title) {
@@ -651,6 +770,7 @@
       }
 
       clearTerminal();
+      hideReport();
       setStatus('running');
 
       try {
@@ -681,6 +801,11 @@
           sse.close();
           setStatus('done');
           appendLine('');
+          return;
+        }
+        if (data.text.startsWith('__REPORT__')) {
+          const items = JSON.parse(data.text.slice('__REPORT__'.length));
+          renderReport(items);
           return;
         }
         appendLine(data.text);
@@ -752,6 +877,44 @@
     }
     function hideError() {
       errorBanner.classList.remove('visible');
+    }
+
+    // ── Report ────────────────────────────────────────────
+    function renderReport(items) {
+      const okCount  = items.filter(i => i.ok).length;
+      const errCount = items.filter(i => !i.ok).length;
+      const allOk    = errCount === 0;
+
+      reportHeader.className = 'report-header ' + (allOk ? 'all-ok' : 'has-err');
+      document.getElementById('reportIconOk').style.display  = allOk ? '' : 'none';
+      document.getElementById('reportIconErr').style.display = allOk ? 'none' : '';
+
+      reportTitle.textContent = allOk
+        ? 'Todas as pastas foram processadas com sucesso'
+        : `${errCount} pasta${errCount > 1 ? 's' : ''} com erro`;
+
+      reportSummary.textContent = `${okCount} ok · ${errCount} erro${errCount !== 1 ? 's' : ''} · ${items.length} total`;
+
+      reportBody.innerHTML = items.map(item => {
+        const statusCls = item.ok ? 'ok' : 'err';
+        const icon = item.ok
+          ? '<svg viewBox="0 0 24 24"><polyline points="6,12 10,16 18,8"/></svg>'
+          : '<svg viewBox="0 0 24 24"><line x1="7" y1="7" x2="17" y2="17"/><line x1="17" y1="7" x2="7" y2="17"/></svg>';
+        const label = item.ok ? 'Sucesso' : 'Erro';
+        return `<tr>
+          <td class="col-status ${statusCls}">${icon}</td>
+          <td class="col-name">${item.nome}</td>
+          <td class="col-path" title="${item.pasta}">${item.pasta}</td>
+          <td class="col-result ${statusCls}">${label}</td>
+        </tr>`;
+      }).join('');
+
+      reportPanel.classList.add('visible');
+      reportPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+
+    function hideReport() {
+      reportPanel.classList.remove('visible');
     }
   </script>
 </body>

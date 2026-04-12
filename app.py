@@ -110,11 +110,12 @@ def executar(body: dict):
 def _worker(pastas: dict, excel: str):
     _is_running.set()
     python = sys.executable
-    converter = str(_SCRIPTS / "converter_dwg_dxf.py")
     extractor = str(_SCRIPTS / "extrair_dados_dxf.py")
     flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     total = len(pastas)
     erros = []
+
+    resultados = []  # lista de {nome, pasta, ok, erro?}
 
     try:
         for idx, (nome, pasta) in enumerate(pastas.items(), 1):
@@ -123,22 +124,15 @@ def _worker(pastas: dict, excel: str):
             _log(f"  {pasta}")
             _log(f"{'━' * 56}")
 
-            # Etapa 1: Converter DWG → DXF
-            _log(f"\n  [1/2] Convertendo DWG → DXF...")
-            ok = _run_proc([python, converter, pasta], flags)
+            # Pipeline unificado: por lote → converter → extrair → gravar → salvar
+            _log(f"\n  Iniciando pipeline em lotes...")
+            ok = _run_proc([python, "-u", extractor, pasta, excel], flags)
             if not ok:
                 erros.append(nome)
-                _log(f"  ✗ Falha na conversão de {nome}.")
+                resultados.append({"nome": nome, "pasta": pasta, "ok": False})
+                _log(f"  ✗ Falha no processamento de {nome}.")
                 continue
-            _log(f"  ✓ Conversão concluída.")
-
-            # Etapa 2: Extrair dados
-            _log(f"\n  [2/2] Extraindo dados e atualizando planilha...")
-            ok = _run_proc([python, extractor, pasta, excel], flags)
-            if not ok:
-                erros.append(nome)
-                _log(f"  ✗ Falha na extração de {nome}.")
-                continue
+            resultados.append({"nome": nome, "pasta": pasta, "ok": True})
             _log(f"  ✓ {nome} processado.")
 
         _log(f"\n{'━' * 56}")
@@ -152,6 +146,7 @@ def _worker(pastas: dict, excel: str):
         _log(f"\n  ✗ ERRO CRÍTICO: {exc}")
     finally:
         _is_running.clear()
+        _log("__REPORT__" + json.dumps(resultados))
         _log("__DONE__")
 
 
@@ -161,6 +156,9 @@ def _log(msg: str):
 
 def _run_proc(cmd: list, flags: int) -> bool:
     try:
+        env = os.environ.copy()
+        env["PYTHONUNBUFFERED"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -168,7 +166,9 @@ def _run_proc(cmd: list, flags: int) -> bool:
             text=True,
             encoding="utf-8",
             errors="replace",
+            bufsize=1,  # line-buffered
             creationflags=flags,
+            env=env,
         )
         for line in proc.stdout:
             _log("  " + line.rstrip())

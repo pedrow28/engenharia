@@ -17,6 +17,7 @@ import sys
 import os
 import re
 import json
+import time
 from collections import defaultdict
 from pathlib import Path
 
@@ -28,6 +29,24 @@ from pathlib import Path
 # Peso específico do concreto (kg/m³)
 PESO_ESPECIFICO_CONCRETO = 2400
 
+# Flag de debug — controlada por env var DEBUG_DXF=1.
+# Quando desligada (padrão) suprime os prints [DEBUG ...] para manter o log limpo
+# em execuções em lote (ex.: 260+ lajes).
+DEBUG = os.environ.get('DEBUG_DXF', '').strip() not in ('', '0', 'false', 'False')
+
+
+def dprint(*args, **kwargs):
+    """print() condicional ao DEBUG. Sempre com flush=True quando ativado."""
+    if DEBUG:
+        kwargs.setdefault('flush', True)
+        print(*args, **kwargs)
+
+
+def iprint(*args, **kwargs):
+    """print() de progresso — sempre visível, sempre com flush."""
+    kwargs.setdefault('flush', True)
+    print(*args, **kwargs)
+
 
 # =============================================================================
 # EXTRAÇÃO DO NOME DO ARQUIVO
@@ -38,17 +57,21 @@ def parse_filename(filename):
     Extrai dados do nome do arquivo.
     Padrão: PEÇA-LARGURAxALTURAxCOMPRIMENTO-FORMA E ARMAÇÃO-RXX
     Exemplo: P5-30x80x1408-FORMA E ARMAÇÃO-R01
+
+    Tolera espaços opcionais ao redor dos hífens separadores — alguns projetos
+    de pilares nomeiam assim: "P10 - 40x50x2097-FORMA E ARMAÇÃO-R00".
     """
     name = Path(filename).stem
     # Remover sufixo de cópia do Windows ex: " (1)", " (2)"
     name = re.sub(r'\s*\(\d+\)$', '', name)
 
-    # Padrão com seção: nome-LxAxC-tipo-revisao
+    # Padrão com seção: nome-LxAxC-tipo-revisao (com espaços opcionais nos hífens)
     match = re.match(
-        r'^(.+?)-(\d+[xX]\d+(?:[xX][\d,.]+)?)-(.+?)-(R\d+)$', name
+        r'^(.+?)\s*-\s*(\d+[xX]\d+(?:[xX][\d,.]+)?)\s*-\s*(.+?)\s*-\s*(R\d+)$',
+        name,
     )
     if match:
-        titulo = match.group(1)
+        titulo = match.group(1).strip()
         secao_raw = match.group(2)
         parts = re.split(r'[xX]', secao_raw)
         if len(parts) == 3:
@@ -66,11 +89,14 @@ def parse_filename(filename):
         }
 
     # Padrão sem seção (ex: lajes L201=L301-FORMA E ARMAÇÃO-R00)
-    match2 = re.match(r'^(.+?)-(FORMA E ARMAÇÃO|FORMA|ARMAÇÃO)-(R\d+)$', name)
+    match2 = re.match(
+        r'^(.+?)\s*-\s*(FORMA E ARMAÇÃO|FORMA|ARMAÇÃO)\s*-\s*(R\d+)$',
+        name,
+    )
     if match2:
         return {
             'nome_arquivo': name,
-            'titulo_peca': match2.group(1),
+            'titulo_peca': match2.group(1).strip(),
             'secao': None,
             'comprimento_cm': None,
         }
@@ -369,11 +395,11 @@ def _extrair_peso_cp190rb(listaf, y_groups):
             peso_protendido += peso_linha
 
     if encontrados:
-        print(f"  [DEBUG PROTENDIDO] CP190RB resumo encontrado ({len(encontrados)}):")
+        dprint(f"  [DEBUG PROTENDIDO] CP190RB resumo encontrado ({len(encontrados)}):")
         for i, e in enumerate(encontrados):
-            print(f"    [{i}] valor={e['valor']:.2f}  x={e['x']:.0f}  y={e['y']:.0f}")
+            dprint(f"    [{i}] valor={e['valor']:.2f}  x={e['x']:.0f}  y={e['y']:.0f}")
     else:
-        print(f"  [DEBUG PROTENDIDO] CP190RB não encontrado")
+        dprint(f"  [DEBUG PROTENDIDO] CP190RB não encontrado")
 
     return peso_protendido
 
@@ -434,9 +460,10 @@ def extract_peso_total_aco(msp):
         return {}
 
     # DEBUG: todos os PESO TOTAL encontrados
-    print(f"  [DEBUG CONSOLO] PESO TOTAL encontrados ({len(peso_entries)}):")
-    for i, pe in enumerate(peso_entries):
-        print(f"    [{i}] valor={pe['valor']:.2f}  x={pe['x_label']:.0f}  y={pe['y']:.0f}")
+    dprint(f"  [DEBUG CONSOLO] PESO TOTAL encontrados ({len(peso_entries)}):")
+    if DEBUG:
+        for i, pe in enumerate(peso_entries):
+            dprint(f"    [{i}] valor={pe['valor']:.2f}  x={pe['x_label']:.0f}  y={pe['y']:.0f}")
 
     # --- Classificar tabelas: consolo vs armação principal ---
     # Cada bloco INSERT 'LISTA DE FERROS CONSOLO' tem atributo 'D' com multiplicidade
@@ -455,7 +482,7 @@ def extract_peso_total_aco(msp):
             consolo_block_info.append((x, by, mult))
 
     consolo_block_xs = [x for x, by, _ in consolo_block_info]
-    print(f"  [DEBUG CONSOLO] Blocos INSERT 'LISTA DE FERROS CONSOLO': {len(consolo_block_info)} -> {[(f'x={x:.0f}', f'{m}x') for x, _, m in consolo_block_info]}")
+    dprint(f"  [DEBUG CONSOLO] Blocos INSERT 'LISTA DE FERROS CONSOLO': {len(consolo_block_info)} -> {[(f'x={x:.0f}', f'{m}x') for x, _, m in consolo_block_info]}")
 
     if consolo_block_xs:
         threshold = 1500
@@ -466,18 +493,18 @@ def extract_peso_total_aco(msp):
         consolo = [e for e in peso_entries
                    if any(abs(e['x_label'] - bx) < threshold for bx in consolo_block_xs)]
         frouxo = [e for e in peso_entries if e not in consolo]
-        print(f"  [DEBUG] Threshold={threshold}: consolo_entries={len(consolo)}, frouxo_entries={len(frouxo)}")
+        dprint(f"  [DEBUG] Threshold={threshold}: consolo_entries={len(consolo)}, frouxo_entries={len(frouxo)}")
 
         # Fallback: quando todas as entradas foram para consolo (tabelas muito próximas em X),
         # usar distância euclidiana — a mais distante de qualquer bloco consolo = tabela principal.
         if not frouxo and len(consolo) > 1:
-            print(f"  [DEBUG] Frouxo vazio — usando distância euclidiana para separar tabela principal.")
+            dprint(f"  [DEBUG] Frouxo vazio — usando distância euclidiana para separar tabela principal.")
             def _min_dist(pe):
                 return min(_dist_eucl(pe, bx, by) for bx, by, _ in consolo_block_info)
             sorted_by_dist = sorted(consolo, key=_min_dist, reverse=True)
             frouxo = [sorted_by_dist[0]]
             consolo = sorted_by_dist[1:]
-            print(f"  [DEBUG] Após fallback euclidiano: frouxo={[e['valor'] for e in frouxo]}, consolo={[e['valor'] for e in consolo]}")
+            dprint(f"  [DEBUG] Após fallback euclidiano: frouxo={[e['valor'] for e in frouxo]}, consolo={[e['valor'] for e in consolo]}")
 
     elif len(peso_entries) == 1:
         frouxo = peso_entries
@@ -493,7 +520,7 @@ def extract_peso_total_aco(msp):
     # Se há protendido, subtrair do total para obter o frouxo puro
     if peso_total_tabela is not None and peso_protendido > 0:
         peso_frouxo = peso_total_tabela - peso_protendido
-        print(f"  [DEBUG PROTENDIDO] peso_total_tabela={peso_total_tabela:.2f} - protendido={peso_protendido:.2f} = frouxo={peso_frouxo:.2f}")
+        dprint(f"  [DEBUG PROTENDIDO] peso_total_tabela={peso_total_tabela:.2f} - protendido={peso_protendido:.2f} = frouxo={peso_frouxo:.2f}")
     else:
         peso_frouxo = peso_total_tabela
 
@@ -512,8 +539,8 @@ def extract_peso_total_aco(msp):
     else:
         peso_consolo = None
 
-    print(f"  [DEBUG CONSOLO] frouxo={[e['valor'] for e in frouxo]}  consolo={[(e['valor'], _mult_consolo(e['x_label'])) for e in consolo]}")
-    print(f"  [DEBUG CONSOLO] n_blocos={n_consolos} soma_consolo={peso_consolo}")
+    dprint(f"  [DEBUG CONSOLO] frouxo={[e['valor'] for e in frouxo]}  consolo={[(e['valor'], _mult_consolo(e['x_label'])) for e in consolo]}")
+    dprint(f"  [DEBUG CONSOLO] n_blocos={n_consolos} soma_consolo={peso_consolo}")
 
     return {
         'peso_aco_frouxo_kg': peso_frouxo,
@@ -558,10 +585,10 @@ def extrair_dados_completos(filepath):
     try:
         doc = ezdxf.readfile(filepath)
     except IOError:
-        print(f"  ERRO: Não foi possível ler: {filepath}")
+        iprint(f"  ERRO: Não foi possível ler: {filepath}")
         return None
     except ezdxf.DXFStructureError:
-        print(f"  ERRO: DXF inválido: {filepath}")
+        iprint(f"  ERRO: DXF inválido: {filepath}")
         return None
 
     msp = doc.modelspace()
@@ -642,7 +669,7 @@ def extrair_dados_completos(filepath):
     # Pilares nunca têm aço protendido — qualquer CP190RB detectado
     # (ex: grampos de ancoragem no consolo) é revertido para o frouxo.
     if tipo_peca == 'PILAR' and peso_protendido:
-        print(f"  [PILAR] Revertendo CP190RB ({peso_protendido:.2f} kg) para frouxo — pilares não têm protendido.")
+        dprint(f"  [PILAR] Revertendo CP190RB ({peso_protendido:.2f} kg) para frouxo — pilares não têm protendido.")
         peso_frouxo = (peso_frouxo or 0) + peso_protendido
         peso_protendido = 0
 
@@ -745,168 +772,621 @@ def formatar_relatorio(dados):
 # ATUALIZAÇÃO DA PLANILHA (Excel)
 # =============================================================================
 
-def atualizar_planilha(caminho_excel, dados_extraidos):
-    """
-    Atualiza a planilha Excel com os dados extraídos.
+# Mapa tipo → nome da aba na planilha
+_SHEET_MAP = {'PILAR': 'Pilares', 'VIGA': 'Vigas', 'LAJE': 'Lajes'}
+
+# Mapa coluna (1-based) → chave do dict de dados extraídos
+_MAPA_COLUNAS = {
+    3: 'C_nome_desenho',             # C
+    4: 'D_quantidade',               # D
+    5: 'E_secao',                    # E
+    6: 'F_comprimento_cm',           # F
+    7: 'G_volume_concreto_m3',       # G
+    9: 'I_fck_mpa',                  # I
+    10: 'J_fcj_mpa',                 # J
+    11: 'K_peso_aco_frouxo_kg',      # K
+    12: 'L_peso_aco_protendido_kg',  # L
+    13: 'M_peso_aco_consolo_kg',     # M
+}
+
+
+def _abrir_e_indexar(caminho_excel):
+    """Abre o .xlsm e constrói o dict {titulo → linha} por aba.
+
+    Retorna (wb, indices, proxima_livre). Em caso de erro, retorna (None, None, None).
     """
     try:
         import openpyxl
     except ImportError:
-        print("ERRO: Biblioteca openpyxl não instalada. Instale com: pip install openpyxl")
-        return
+        iprint("ERRO: Biblioteca openpyxl não instalada. Instale com: pip install openpyxl")
+        return None, None, None
 
-    print(f"\nAtualizando planilha: {caminho_excel}...")
-    
+    iprint(f"\nAbrindo planilha: {caminho_excel}")
+    t0 = time.perf_counter()
     try:
-        # Carregar com keep_vba=True para não estragar as macros
         wb = openpyxl.load_workbook(caminho_excel, keep_vba=True)
     except Exception as e:
-        print(f"ERRO ao abrir planilha: {e}")
-        return
+        iprint(f"ERRO ao abrir planilha: {e}")
+        return None, None, None
+    iprint(f"  [fase] Planilha carregada em {time.perf_counter() - t0:.1f}s")
 
+    t_idx = time.perf_counter()
+    indices: dict = {}         # {sheet_name: {titulo_norm: linha}}
+    proxima_livre: dict = {}   # {sheet_name: próxima linha disponível}
+
+    for sheet_name in set(_SHEET_MAP.values()):
+        if sheet_name not in wb.sheetnames:
+            continue
+        ws = wb[sheet_name]
+        idx: dict = {}
+        ultima_com_dado = 3  # cabeçalho até linha 3; dados começam em 4
+        # iter_rows é MUITO mais rápido que ws.cell() em loop
+        for row in ws.iter_rows(min_row=4, max_row=ws.max_row,
+                                min_col=2, max_col=2, values_only=False):
+            cell = row[0]
+            val = cell.value
+            if val is not None:
+                key = str(val).strip()
+                if key and key not in idx:
+                    idx[key] = cell.row
+                ultima_com_dado = cell.row
+        indices[sheet_name] = idx
+        proxima_livre[sheet_name] = ultima_com_dado + 1
+        iprint(f"  [fase] Índice '{sheet_name}': {len(idx)} peças existentes "
+               f"(próxima linha livre: {proxima_livre[sheet_name]})")
+    iprint(f"  [fase] Indexação concluída em {time.perf_counter() - t_idx:.1f}s")
+
+    return wb, indices, proxima_livre
+
+
+def _escrever_dados(wb, dados_lista, indices, proxima_livre, heartbeat_every=None):
+    """Grava a lista de peças no workbook em memória usando lookup O(1).
+
+    `indices` e `proxima_livre` são atualizados in-place quando novas linhas são criadas,
+    permitindo que chamadas sucessivas (um lote após outro) permaneçam consistentes.
+
+    Retorna dict com contadores: {'alteracoes', 'criadas', 'puladas', 'linhas': {titulo: linha}}
+    """
     alteracoes = 0
-    
-    for dados in dados_extraidos:
+    criadas = 0
+    puladas = 0
+    linhas_escritas: dict = {}  # {titulo_norm: (sheet_name, row)} — para verificação
+    total = len(dados_lista)
+
+    if heartbeat_every is None:
+        heartbeat_every = max(1, total // 10) if total >= 20 else max(1, total)
+
+    for i, dados in enumerate(dados_lista, 1):
         tipo = dados['A_tipo_peca']
         titulo = dados['B_titulo_peca']
-        
-        # Mapear tipo para nome da aba
-        if tipo == 'PILAR':
-            sheet_name = 'Pilares'
-        elif tipo == 'VIGA':
-            sheet_name = 'Vigas'
-        elif tipo == 'LAJE':
-            sheet_name = 'Lajes'
-        else:
-            print(f"  Pular {titulo}: Tipo '{tipo}' não corresponde a uma aba conhecida.")
+
+        sheet_name = _SHEET_MAP.get(tipo)
+        if not sheet_name:
+            iprint(f"  [skip] {titulo}: tipo '{tipo}' sem aba correspondente.")
+            puladas += 1
             continue
-        
         if sheet_name not in wb.sheetnames:
-            print(f"  ERRO: Aba '{sheet_name}' não existe na planilha.")
+            iprint(f"  [skip] {titulo}: aba '{sheet_name}' não existe.")
+            puladas += 1
             continue
-            
+
         ws = wb[sheet_name]
-        
-        # Procurar a linha pelo Título da Peça (Coluna B)
-        # Assumindo que a coluna B é a 2ª coluna (índice 2 no openpyxl 1-based)
-        linha_encontrada = None
-        for row in range(4, ws.max_row + 1):  # Começa da linha 4 (dados)
-            cell_val = ws.cell(row=row, column=2).value
-            if cell_val and str(cell_val).strip() == titulo:
-                linha_encontrada = row
-                break
-        
-        if not linha_encontrada:
-            print(f"  Peça '{titulo}' não encontrada. Criando nova linha...")
-            # Encontrar próxima linha vazia a partir da linha 4
-            # NÃO usar ws.max_row pois pode incluir linhas com formatação sem dados
-            linha_encontrada = 4
-            while ws.cell(row=linha_encontrada, column=2).value is not None:
-                linha_encontrada += 1
-            
-            # Preencher Colunas de Identificação (A e B)
-            ws.cell(row=linha_encontrada, column=1).value = tipo      # Coluna A: Tipo
-            ws.cell(row=linha_encontrada, column=2).value = titulo    # Coluna B: Título
-            
-        # Colunas de dados brutos (extraídos do DXF)
-        mapa_dados = {
-            3: 'C_nome_desenho',         # C
-            4: 'D_quantidade',           # D
-            5: 'E_secao',               # E
-            6: 'F_comprimento_cm',      # F
-            7: 'G_volume_concreto_m3',  # G
-            9: 'I_fck_mpa',             # I
-            10: 'J_fcj_mpa',            # J
-            11: 'K_peso_aco_frouxo_kg', # K
-            12: 'L_peso_aco_protendido_kg', # L
-            13: 'M_peso_aco_consolo_kg',    # M
-        }
+        idx = indices[sheet_name]
+        key = str(titulo).strip()
 
-        r = linha_encontrada
-        print(f"  Escrevendo '{titulo}' na linha {r}...")
+        r = idx.get(key)
+        if r is None:
+            r = proxima_livre[sheet_name]
+            proxima_livre[sheet_name] = r + 1
+            idx[key] = r
+            ws.cell(row=r, column=1).value = tipo     # A: Tipo
+            ws.cell(row=r, column=2).value = titulo   # B: Título
+            criadas += 1
 
-        # Escrever dados brutos
-        for col_idx, chave in mapa_dados.items():
+        # Dados brutos
+        for col_idx, chave in _MAPA_COLUNAS.items():
             valor = dados.get(chave)
             if valor is not None:
                 ws.cell(row=r, column=col_idx).value = valor
 
-        # Escrever fórmulas (mesmo padrão das abas Vigas/Lajes)
-        ws.cell(row=r, column=8).value = f'=G{r}*D{r}'              # H: Volume total
-        ws.cell(row=r, column=14).value = f'=G{r}*2400+K{r}+L{r}+M{r}'  # N: Peso total unitário
-        ws.cell(row=r, column=15).value = f'=(K{r}+M{r})/G{r}'     # O: Taxa aço frouxo
-        ws.cell(row=r, column=16).value = f'=L{r}/G{r}'             # P: Taxa aço protendido
-        ws.cell(row=r, column=17).value = f'=N{r}*D{r}/1000'        # Q: Peso total (t)
-        ws.cell(row=r, column=18).value = f'=K{r}*D{r}/1000'        # R: Peso total frouxo (t)
-        ws.cell(row=r, column=19).value = f'=L{r}*D{r}/1000'        # S: Peso total protendido (t)
-        
-        alteracoes += 1
+        # Fórmulas
+        ws.cell(row=r, column=8).value  = f'=G{r}*D{r}'                  # H: Volume total
+        ws.cell(row=r, column=14).value = f'=G{r}*2400+K{r}+L{r}+M{r}'   # N: Peso unitário
+        ws.cell(row=r, column=15).value = f'=(K{r}+M{r})/G{r}'           # O: Taxa frouxo
+        ws.cell(row=r, column=16).value = f'=L{r}/G{r}'                  # P: Taxa protendido
+        ws.cell(row=r, column=17).value = f'=N{r}*D{r}/1000'             # Q: Peso total (t)
+        ws.cell(row=r, column=18).value = f'=K{r}*D{r}/1000'             # R: Total frouxo (t)
+        ws.cell(row=r, column=19).value = f'=L{r}*D{r}/1000'             # S: Total protendido (t)
 
-    if alteracoes > 0:
-        try:
-            wb.save(caminho_excel)
-            print(f"\nPlanilha salva com sucesso! {alteracoes} peças atualizadas.")
-        except PermissionError:
-            print(f"\nERRO DE PERMISSÃO: O arquivo '{caminho_excel}' está aberto.")
-            print("POR FAVOR, FECHE O ARQUIVO EXCEL E TENTE NOVAMENTE.")
-        except Exception as e:
-            print(f"ERRO ao salvar planilha: {e}")
+        alteracoes += 1
+        linhas_escritas[key] = (sheet_name, r)
+
+        if i % heartbeat_every == 0 or i == total:
+            iprint(f"  [grav] {i}/{total} peças gravadas...")
+
+    return {
+        'alteracoes': alteracoes,
+        'criadas': criadas,
+        'puladas': puladas,
+        'linhas': linhas_escritas,
+    }
+
+
+def _verificar_em_memoria(wb, dados_lista, indices):
+    """Confirma que cada peça está na linha esperada do workbook em memória.
+
+    Usa o dict de índices — muito barato. Não valida o save, apenas a escrita.
+    Retorna (ok, lista_problemas).
+    """
+    problemas = []
+    for dados in dados_lista:
+        tipo = dados['A_tipo_peca']
+        titulo = dados['B_titulo_peca']
+        sheet_name = _SHEET_MAP.get(tipo)
+        if not sheet_name or sheet_name not in wb.sheetnames:
+            continue  # já foi reportado como "puladas" na escrita
+        idx = indices.get(sheet_name, {})
+        key = str(titulo).strip()
+        r = idx.get(key)
+        if r is None:
+            problemas.append(f"{titulo} [sem linha no índice]")
+            continue
+        ws = wb[sheet_name]
+        cell_val = ws.cell(row=r, column=2).value
+        if cell_val is None or str(cell_val).strip() != key:
+            problemas.append(f"{titulo} [linha {r} contém '{cell_val}']")
+            continue
+        # Sanity extra: a coluna C (nome_desenho) deve ter o mesmo valor que gravamos
+        esperado_c = dados.get('C_nome_desenho')
+        if esperado_c is not None:
+            cell_c = ws.cell(row=r, column=3).value
+            if cell_c != esperado_c:
+                problemas.append(f"{titulo} [col C esperava '{esperado_c}', tem '{cell_c}']")
+    return (len(problemas) == 0, problemas)
+
+
+def _salvar(wb, caminho_excel):
+    """Executa wb.save com tratamento de erro. Retorna (ok, mensagem_ou_None, duracao_s)."""
+    t_sv = time.perf_counter()
+    try:
+        wb.save(caminho_excel)
+        return True, None, time.perf_counter() - t_sv
+    except PermissionError:
+        return False, "arquivo aberto em outro programa — feche o Excel e rode de novo", time.perf_counter() - t_sv
+    except Exception as e:
+        return False, str(e), time.perf_counter() - t_sv
+
+
+def _escrever_checkpoint_json(out_path, dados_acumulados):
+    """Grava dados_acumulados num JSON de checkpoint. Silencioso em erro."""
+    try:
+        with open(out_path, 'w', encoding='utf-8') as f:
+            json.dump(dados_acumulados, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        iprint(f"  ⚠ Falha ao escrever checkpoint JSON: {e}")
+        return False
+
+
+def atualizar_planilha(caminho_excel, dados_extraidos):
+    """
+    Atualiza a planilha Excel com os dados extraídos em uma única passada.
+
+    Thin wrapper sobre os helpers. Para lotes grandes (> BATCH_SIZE), o
+    dispatcher em main() usa `_processar_em_lotes` ao invés desta função.
+    """
+    wb, indices, proxima_livre = _abrir_e_indexar(caminho_excel)
+    if wb is None:
+        return
+
+    iprint(f"  {len(dados_extraidos)} peça(s) para gravar.")
+
+    t_wr = time.perf_counter()
+    stats = _escrever_dados(wb, dados_extraidos, indices, proxima_livre)
+    iprint(f"  [fase] Escrita concluída em {time.perf_counter() - t_wr:.1f}s "
+           f"({stats['alteracoes']} atualizadas, {stats['criadas']} criadas, "
+           f"{stats['puladas']} puladas)")
+
+    # Verificação em memória (barata — só confirma que escrevemos na linha certa)
+    ok, problemas = _verificar_em_memoria(wb, dados_extraidos, indices)
+    if not ok:
+        iprint(f"  ⚠ verificação em memória: {len(problemas)} inconsistência(s)")
+        for p in problemas[:5]:
+            iprint(f"     - {p}")
     else:
-        print("\nNenhuma alteração feita na planilha.")
+        iprint(f"  ✓ verificação em memória: {stats['alteracoes']} peças ok")
+
+    if stats['alteracoes'] > 0:
+        iprint(f"  [fase] Salvando planilha... (pode demorar)")
+        ok_save, err, dt_sv = _salvar(wb, caminho_excel)
+        if ok_save:
+            iprint(f"  [fase] Salvo em {dt_sv:.1f}s")
+            iprint(f"\nPlanilha salva com sucesso! {stats['alteracoes']} peças atualizadas.")
+        else:
+            iprint(f"\nERRO ao salvar planilha: {err}")
+            if 'aberto' in (err or ''):
+                iprint("POR FAVOR, FECHE O ARQUIVO EXCEL E TENTE NOVAMENTE.")
+    else:
+        iprint("\nNenhuma alteração feita na planilha.")
 
 
 # =============================================================================
 # MAIN
 # =============================================================================
 
+def _resumo_linha(dados):
+    """Linha-resumo compacta de uma peça (modo lote).
+    Ex.: 'L-201  qtd=75  16x125x712,5  V=3.42m³  frouxo=180kg  prot=245kg'
+    """
+    titulo = dados.get('B_titulo_peca', '?')
+    qtd = dados.get('D_quantidade')
+    sec = dados.get('E_secao') or ''
+    comp = dados.get('F_comprimento_cm')
+    vol = dados.get('G_volume_concreto_m3')
+    fr = dados.get('K_peso_aco_frouxo_kg')
+    pr = dados.get('L_peso_aco_protendido_kg')
+    co = dados.get('M_peso_aco_consolo_kg')
+
+    partes = [f"{titulo}"]
+    if qtd is not None:
+        partes.append(f"qtd={qtd}")
+    if sec:
+        partes.append(f"{sec}" + (f"x{comp}" if comp else ""))
+    if vol is not None:
+        partes.append(f"V={vol:.2f}m³")
+    if fr is not None:
+        partes.append(f"frouxo={fr:.0f}kg")
+    if pr:
+        partes.append(f"prot={pr:.0f}kg")
+    if co:
+        partes.append(f"consolo={co:.0f}kg")
+    return "  ".join(partes)
+
+
+def _extrair_um_arquivo(arq, idx_global, total, modo_compacto):
+    """Extrai dados de um arquivo DXF e imprime progresso. Retorna (dados|None, dt, erro|None)."""
+    t_arq = time.perf_counter()
+    if modo_compacto:
+        iprint(f"[{idx_global}/{total}] {arq.name}")
+    else:
+        iprint(f"Processando: {arq.name}")
+
+    try:
+        dados = extrair_dados_completos(str(arq))
+    except Exception as exc:
+        dt = time.perf_counter() - t_arq
+        iprint(f"  ✗ EXCEÇÃO em {arq.name}: {exc} ({dt:.1f}s)")
+        return None, dt, str(exc)
+
+    dt = time.perf_counter() - t_arq
+    if dados:
+        if modo_compacto:
+            iprint(f"  ok ({dt:.1f}s)  {_resumo_linha(dados)}")
+        else:
+            iprint(formatar_relatorio(dados))
+            iprint(f"  [tempo] {dt:.1f}s")
+        return dados, dt, None
+
+    iprint(f"  ✗ ERRO ao processar {arq.name} ({dt:.1f}s)")
+    return None, dt, "sem dados"
+
+
+def _processar_sequencial(arquivos, modo_compacto):
+    """Extração pura (sem planilha) — usada quando não há caminho_excel.
+    Retorna (todos, erros, t_acum_arq).
+    """
+    todos = []
+    erros = []
+    t_acum = 0.0
+    total = len(arquivos)
+    for i, arq in enumerate(arquivos, 1):
+        dados, dt, _ = _extrair_um_arquivo(arq, i, total, modo_compacto)
+        t_acum += dt
+        if dados:
+            todos.append(dados)
+        else:
+            erros.append(arq.name)
+    return todos, erros, t_acum
+
+
+def _resolver_dxf(dwg: Path):
+    """Dado um .dwg, retorna o .dxf correspondente (existente) ou None.
+    Tenta minúscula primeiro (saída padrão do ODA), depois maiúscula."""
+    dxf_lower = dwg.with_suffix('.dxf')
+    if dxf_lower.exists():
+        return dxf_lower
+    dxf_upper = dwg.with_suffix('.DXF')
+    if dxf_upper.exists():
+        return dxf_upper
+    return None
+
+
+def _processar_em_lotes(dwgs, pasta, caminho_excel, batch_size,
+                        modo_compacto, checkpoint_json_path):
+    """
+    Pipeline COMPLETO em lotes: converter → extrair → gravar → verificar → salvar.
+    Cada lote faz o processo inteiro antes de passar ao próximo.
+
+    Ordem dentro de um lote:
+    1. CONVERTER: DWGs pendentes do lote → DXFs (via ODA, staging hardlink).
+       Pula DWGs que já têm DXF correspondente (resume automático).
+    2. EXTRAIR: dados de cada DXF do lote (inclui os já pré-convertidos).
+    3. GRAVAR: escreve os dados no workbook em memória.
+    4. VERIFICAR: confirma em memória que cada peça está na linha certa.
+    5. SALVAR: persiste o .xlsm em disco.
+    6. CHECKPOINT: dump JSON incremental do acumulado.
+
+    Resiliência: se qualquer fase quebrar, os lotes anteriores permanecem
+    persistidos (no disco, no .xlsm e no checkpoint). Rerun pula os DWGs
+    que já têm DXF E ainda regrava no Excel (idempotente via dict de índices).
+
+    O workbook é aberto UMA ÚNICA VEZ antes do primeiro lote e mantido em
+    memória até o fim — evita pagar o custo do load/indexação por lote.
+    """
+    # Import tardio para evitar ciclo e deixar erro claro se converter sumir
+    try:
+        from converter_dwg_dxf import encontrar_oda_converter, converter_lote
+    except ImportError as e:
+        iprint(f"ERRO ao importar converter_dwg_dxf: {e}")
+        return [], [d.name for d in dwgs], 0.0
+
+    oda_path = encontrar_oda_converter()
+    if not oda_path:
+        iprint("ERRO: ODA File Converter não encontrado!")
+        iprint("Baixe em: https://www.opendesign.com/guestfiles/oda_file_converter")
+        return [], [d.name for d in dwgs], 0.0
+    iprint(f"ODA File Converter: {oda_path}")
+
+    total = len(dwgs)
+    n_lotes = (total + batch_size - 1) // batch_size
+    ja_convertidos = sum(1 for d in dwgs if _resolver_dxf(d) is not None)
+
+    iprint(f"\n{'═' * 56}")
+    iprint(f"  PIPELINE EM LOTES: {total} arquivo(s) → {n_lotes} lote(s) de até {batch_size}")
+    iprint(f"  Resume: {ja_convertidos} DWG(s) já com DXF — conversão será pulada")
+    iprint(f"  Cada lote: converter → extrair → gravar → verificar → salvar")
+    iprint(f"{'═' * 56}")
+
+    # Abrir + indexar a planilha UMA VEZ — reaproveitado entre lotes.
+    wb, indices, proxima_livre = _abrir_e_indexar(caminho_excel)
+    if wb is None:
+        iprint("  ⚠ Planilha indisponível — abortando pipeline.")
+        return [], [d.name for d in dwgs], 0.0
+
+    todos = []
+    erros = []
+    t_acum_arq = 0.0
+    abortado = False
+
+    for lote_idx in range(n_lotes):
+        inicio = lote_idx * batch_size
+        fim = min(inicio + batch_size, total)
+        dwgs_lote = dwgs[inicio:fim]
+        num_lote = lote_idx + 1
+
+        iprint(f"\n{'━' * 56}")
+        iprint(f"  LOTE {num_lote}/{n_lotes}  |  arquivos {inicio + 1}-{fim}/{total}")
+        iprint(f"{'━' * 56}")
+
+        t_lote = time.perf_counter()
+
+        # ── Fase 1: CONVERTER DWGs pendentes do lote ─────────────────
+        pendentes_lote = [d for d in dwgs_lote if _resolver_dxf(d) is None]
+        reaproveitados = len(dwgs_lote) - len(pendentes_lote)
+
+        if pendentes_lote:
+            msg_reuse = f"  (+{reaproveitados} reaproveitado(s))" if reaproveitados else ""
+            iprint(f"  [lote {num_lote}] convertendo {len(pendentes_lote)} DWG(s){msg_reuse}...")
+            t_conv = time.perf_counter()
+            try:
+                movidos = converter_lote(oda_path, pasta, pendentes_lote,
+                                         num_lote, n_lotes)
+            except KeyboardInterrupt:
+                iprint(f"  [lote {num_lote}] ⚠ interrompido pelo usuário durante conversão.")
+                abortado = True
+                break
+            except Exception as exc:
+                iprint(f"  [lote {num_lote}] ✗ EXCEÇÃO na conversão: {exc}")
+                abortado = True
+                break
+            iprint(f"  [lote {num_lote}] conversão concluída em "
+                   f"{time.perf_counter() - t_conv:.1f}s")
+            if movidos == 0:
+                iprint(f"  [lote {num_lote}] ⚠ nenhum DXF gerado — pulando lote.")
+                erros.extend(d.name for d in pendentes_lote)
+                continue
+        else:
+            iprint(f"  [lote {num_lote}] todos os {len(dwgs_lote)} DWG(s) já convertidos — pulando conversão.")
+
+        # ── Fase 2: EXTRAIR DXFs do lote ─────────────────────────────
+        iprint(f"  [lote {num_lote}] extraindo {len(dwgs_lote)} DXF(s)...")
+        t_extr = time.perf_counter()
+        dados_lote = []
+        for i, dwg in enumerate(dwgs_lote, 1):
+            dxf = _resolver_dxf(dwg)
+            if dxf is None:
+                iprint(f"  [lote {num_lote}] ⚠ DXF faltando para {dwg.name} — pulando.")
+                erros.append(dwg.name + " (sem DXF)")
+                continue
+            global_i = inicio + i
+            dados, dt, _ = _extrair_um_arquivo(dxf, global_i, total, modo_compacto)
+            t_acum_arq += dt
+            if dados:
+                dados_lote.append(dados)
+            else:
+                erros.append(dxf.name)
+        iprint(f"  [lote {num_lote}] extração: {len(dados_lote)}/{len(dwgs_lote)} ok "
+               f"em {time.perf_counter() - t_extr:.1f}s")
+
+        if not dados_lote:
+            iprint(f"  [lote {num_lote}] ⚠ lote sem dados — pulando gravação.")
+            continue
+
+        # ── Fase 3: GRAVAR no workbook em memória ────────────────────
+        iprint(f"  [lote {num_lote}] gravando no workbook...")
+        t_wr = time.perf_counter()
+        stats = _escrever_dados(wb, dados_lote, indices, proxima_livre,
+                                heartbeat_every=max(10, len(dados_lote) // 3))
+        iprint(f"  [lote {num_lote}] escrita: {stats['alteracoes']} alteradas, "
+               f"{stats['criadas']} criadas, {stats['puladas']} puladas "
+               f"em {time.perf_counter() - t_wr:.1f}s")
+
+        # ── Fase 4: VERIFICAR em memória ─────────────────────────────
+        ok_ver, problemas = _verificar_em_memoria(wb, dados_lote, indices)
+        if not ok_ver:
+            iprint(f"  [lote {num_lote}] ⚠ verificação: {len(problemas)} inconsistência(s)")
+            for p in problemas[:5]:
+                iprint(f"       - {p}")
+            if len(problemas) > 5:
+                iprint(f"       ... e mais {len(problemas) - 5}")
+        else:
+            iprint(f"  [lote {num_lote}] ✓ verificação: {stats['alteracoes']} peças confirmadas")
+
+        # ── Fase 5: SALVAR .xlsm (persistir lote no disco) ───────────
+        iprint(f"  [lote {num_lote}] salvando planilha...")
+        ok_save, err, dt_sv = _salvar(wb, caminho_excel)
+        if not ok_save:
+            iprint(f"  [lote {num_lote}] ✗ SAVE FALHOU em {dt_sv:.1f}s: {err}")
+            if 'aberto' in (err or ''):
+                iprint("  ⚠ FECHE O EXCEL e rode novamente — os lotes anteriores já foram persistidos.")
+            iprint(f"  ⚠ Abortando lotes restantes. Lotes {num_lote}..{n_lotes} NÃO foram salvos.")
+            abortado = True
+            break
+        iprint(f"  [lote {num_lote}] ✓ salvo em {dt_sv:.1f}s")
+
+        # Confirmado: lote persistido no .xlsm. Pode adicionar ao acumulado.
+        todos.extend(dados_lote)
+
+        # ── Fase 6: Checkpoint JSON incremental ──────────────────────
+        if checkpoint_json_path is not None:
+            _escrever_checkpoint_json(checkpoint_json_path, todos)
+
+        iprint(f"  [lote {num_lote}] TOTAL: {time.perf_counter() - t_lote:.1f}s  "
+               f"|  acumulado: {len(todos)}/{total} peças persistidas")
+
+    if abortado:
+        iprint(f"\n[resumo pipeline] ⚠ Interrompido — {len(todos)}/{total} peças persistidas antes do erro.")
+    else:
+        iprint(f"\n[resumo pipeline] ✓ {n_lotes} lote(s) processados.")
+
+    return todos, erros, t_acum_arq
+
+
+def _listar_dwgs_ordenado(pasta: Path):
+    """Lista todos os DWGs da pasta (case-insensitive, ordenados pelo nome)."""
+    vistos = {}
+    for p in pasta.iterdir():
+        if p.is_file() and p.suffix.lower() == '.dwg':
+            vistos[p.name.lower()] = p
+    return sorted(vistos.values(), key=lambda p: p.name.lower())
+
+
 def main():
     if len(sys.argv) < 2:
-        print("Uso: python extrair_dados_dxf.py <arquivo.dxf ou pasta> [caminho_planilha.xlsm]")
-        print("  Extrai dados de desenhos DXF.")
-        print("  Se o caminho da planilha for informado, ela será atualizada automaticamente.")
+        iprint("Uso: python extrair_dados_dxf.py <arquivo.dxf ou pasta> [caminho_planilha.xlsm]")
+        iprint("  Pipeline completo: converte DWG→DXF, extrai dados e atualiza a planilha.")
+        iprint("  Se a pasta só tiver DXFs (sem DWGs), apenas extrai — modo legado.")
+        iprint("  Env:")
+        iprint("    DEBUG_DXF=1    ativa prints de debug detalhados")
+        iprint("    BATCH_SIZE=N   tamanho do lote (padrão 50; 0 desativa batching)")
         sys.exit(1)
 
     caminho = sys.argv[1]
-    
+
     # Verificar se foi passado o excel como segundo argumento
     caminho_excel = None
     if len(sys.argv) > 2:
         caminho_excel = sys.argv[2]
         if not os.path.exists(caminho_excel):
-            print(f"AVISO: Planilha não encontrada: {caminho_excel}")
+            iprint(f"AVISO: Planilha não encontrada: {caminho_excel}")
             caminho_excel = None
 
-    if os.path.isdir(caminho):
-        arquivos = sorted(Path(caminho).glob('*.dxf'))
-        if not arquivos:
-            print(f"Nenhum .dxf em: {caminho}")
-            sys.exit(1)
-        print(f"Encontrados {len(arquivos)} arquivo(s) DXF\n")
-    else:
-        arquivos = [Path(caminho)]
+    # Classificar entrada: arquivo único | pasta com DWGs (pipeline) | pasta só DXF (legado)
+    entrada = Path(caminho)
+    modo_pipeline = False
+    dwgs: list = []
+    arquivos: list = []
 
-    todos = []
-    for arq in arquivos:
-        print(f"Processando: {arq.name}")
-        dados = extrair_dados_completos(str(arq))
-        if dados:
-            print(formatar_relatorio(dados))
-            todos.append(dados)
+    if entrada.is_dir():
+        dwgs = _listar_dwgs_ordenado(entrada)
+        if dwgs and caminho_excel:
+            modo_pipeline = True
+            iprint(f"Encontrados {len(dwgs)} arquivo(s) DWG\n")
         else:
-            print(f"  ERRO ao processar {arq.name}\n")
+            arquivos = sorted(entrada.glob('*.dxf')) + sorted(entrada.glob('*.DXF'))
+            # Dedup case-insensitive
+            vistos = {p.name.lower(): p for p in arquivos}
+            arquivos = sorted(vistos.values(), key=lambda p: p.name.lower())
+            if not arquivos:
+                iprint(f"Nenhum .dwg ou .dxf em: {caminho}")
+                sys.exit(1)
+            if dwgs and not caminho_excel:
+                iprint(f"{len(dwgs)} DWG(s) encontrados mas sem planilha — extraindo apenas DXFs existentes.\n")
+            else:
+                iprint(f"Encontrados {len(arquivos)} arquivo(s) DXF (modo legado — sem conversão)\n")
+    else:
+        arquivos = [entrada]
 
-    # Salvar JSON
-    if todos:
-        base = Path(caminho).parent if os.path.isfile(caminho) else Path(caminho)
-        out = base / 'dados_extraidos.json'
-        with open(out, 'w', encoding='utf-8') as f:
-            json.dump(todos, f, ensure_ascii=False, indent=2)
-        print(f"Dados salvos em: {out}")
-        
-        # Atualizar Excel se solicitado
-        if caminho_excel:
-            atualizar_planilha(caminho_excel, todos)
+    total = len(dwgs) if modo_pipeline else len(arquivos)
 
+    # Modo compacto do log: com muitos arquivos, o relatório cheio polui demais.
+    modo_compacto = total > 10
+    if modo_compacto:
+        iprint(f"Log compacto ativo ({total} arquivos). Use DEBUG_DXF=1 para detalhes.\n")
+
+    # Batch size via env var (padrão 50; 0 desativa batching)
+    try:
+        batch_size = int(os.environ.get('BATCH_SIZE', '50'))
+    except ValueError:
+        batch_size = 50
+
+    # Caminho do checkpoint JSON
+    base = entrada.parent if entrada.is_file() else entrada
+    checkpoint_path = base / 'dados_extraidos.json'
+
+    t_geral = time.perf_counter()
+
+    if modo_pipeline:
+        # Pipeline completo em lotes: convert → extract → write → verify → save
+        bs = batch_size if batch_size > 0 else total
+        iprint(f"Pipeline em lotes: {bs} por lote (total={total}, excel='{Path(caminho_excel).name}')")
+        todos, erros, t_acum_arq = _processar_em_lotes(
+            dwgs, entrada, caminho_excel, bs, modo_compacto, checkpoint_path
+        )
+    else:
+        # Modo legado: só extração (sem conversão). Usado quando a pasta já tem
+        # DXFs prontos, ou quando foi passado um arquivo avulso, ou quando não
+        # há planilha.
+        motivo = ("arquivo único" if entrada.is_file()
+                  else "sem planilha — só extração" if caminho_excel is None
+                  else "pasta só com DXF")
+        iprint(f"Modo legado ({motivo}) — sem conversão.")
+        todos, erros, t_acum_arq = _processar_sequencial(arquivos, modo_compacto)
+
+        # Legado: grava JSON e chama a planilha no final
+        if todos:
+            _escrever_checkpoint_json(checkpoint_path, todos)
+            iprint(f"Dados salvos em: {checkpoint_path}")
+            if caminho_excel:
+                atualizar_planilha(caminho_excel, todos)
+
+    # Resumo final
+    dt_total = time.perf_counter() - t_geral
+    media = (t_acum_arq / total) if total else 0.0
+    iprint(f"\n[resumo extração] {len(todos)}/{total} ok  "
+           f"| tempo total: {dt_total:.1f}s  "
+           f"| média extração: {media:.2f}s/arq")
+    if erros:
+        iprint(f"[resumo extração] falhas: {len(erros)} -> {', '.join(erros[:5])}"
+               + ("..." if len(erros) > 5 else ""))
+
+    # Garante que o JSON final reflete o estado acumulado no modo pipeline
+    # (nos lotes já está lá, mas não custa reescrever ao final).
+    if todos and modo_pipeline:
+        _escrever_checkpoint_json(checkpoint_path, todos)
+        iprint(f"Dados finais em: {checkpoint_path}")
+
+    iprint(f"[fim] tempo total do extractor: {dt_total:.1f}s")
     return todos
 
 

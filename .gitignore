@@ -8,11 +8,25 @@ __pycache__/
 # Temporários do Office
 ~$*
 
-# Arquivos grandes de dados (opcionais — remova se quiser versionar)
+# Arquivos grandes de dados
 dados/dados_extraidos.json
 
-# Backup
-_backup/
+# Desenhos e dados reais de cliente (não versionar)
+desenhos/
+issues/
 
-# Ambientes e configs locais
+# Backup e scripts temporários
+_backup/
+temp_*.py
+
+# Chaves e segredos
+ssh_key.txt
+ssh_key.txt.pub
+*.pem
+*.key
 .env
+
+# Configs locais de IDE/assistentes
+.claude/
+.vscode/
+.idea/
